@@ -5,6 +5,7 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
+from utils import canny_edge_from_pil
 
 def get_nonorm_transform(resolution):
     nonorm_transform =  transforms.Compose(
@@ -28,6 +29,7 @@ class FontDataset(Dataset):
         # Get Data path
         self.get_path()
         self.transforms = transforms
+        self.resolution = args.resolution
         self.nonorm_transforms = get_nonorm_transform(args.resolution)
 
     def get_path(self):
@@ -51,16 +53,19 @@ class FontDataset(Dataset):
         # Read content image
         content_image_path = f"{self.root}/{self.phase}/ContentImage/{content}.jpg"
         content_image = Image.open(content_image_path).convert('RGB')
+        content_edge = canny_edge_from_pil(content_image, resolution=self.resolution)
 
         # Random sample used for style image
         images_related_style = self.style_to_images[style].copy()
         images_related_style.remove(target_image_path)
         style_image_path = random.choice(images_related_style)
         style_image = Image.open(style_image_path).convert("RGB")
+        style_edge = canny_edge_from_pil(style_image, resolution=self.resolution)
         
         # Read target image
         target_image = Image.open(target_image_path).convert("RGB")
         nonorm_target_image = self.nonorm_transforms(target_image)
+        target_edge = canny_edge_from_pil(target_image, resolution=self.resolution)
 
         if self.transforms is not None:
             content_image = self.transforms[0](content_image)
@@ -72,7 +77,10 @@ class FontDataset(Dataset):
             "style_image": style_image,
             "target_image": target_image,
             "target_image_path": target_image_path,
-            "nonorm_target_image": nonorm_target_image}
+            "nonorm_target_image": nonorm_target_image,
+            "content_edge": content_edge,
+            "style_edge": style_edge,
+            "target_edge": target_edge}
         
         if self.scr:
             # Get neg image from the different style of the same content

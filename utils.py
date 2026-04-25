@@ -9,6 +9,7 @@ from fontTools.ttLib import TTFont
 
 import torch
 import torchvision.transforms as transforms
+import torch.nn.functional as F
 
 def save_args_to_yaml(args, output_file):
     # Convert args namespace to a dictionary
@@ -80,6 +81,35 @@ def normalize_mean_std(image):
     image = transforms_norm(image)
 
     return image
+
+
+def canny_edge_from_pil(image, resolution, low_threshold=100, high_threshold=200):
+    """Extract Canny edge map from PIL image and return tensor in [0, 1] with shape [1, H, W]."""
+    gray = np.array(image.convert("L").resize((resolution, resolution), Image.BILINEAR))
+    edges = cv2.Canny(gray, threshold1=low_threshold, threshold2=high_threshold)
+    edges = torch.from_numpy(edges).float().unsqueeze(0) / 255.0
+    return edges
+
+
+def edge_from_tensor(image_tensor):
+    """Differentiable edge magnitude map from image tensor.
+
+    Args:
+        image_tensor: tensor in shape [B, 3, H, W], expected in [-1, 1] or [0, 1].
+    Returns:
+        edge magnitude map in shape [B, 1, H, W], in [0, 1].
+    """
+    if image_tensor.min() < 0:
+        image_tensor = (image_tensor / 2 + 0.5).clamp(0, 1)
+
+    gray = 0.2989 * image_tensor[:, 0:1] + 0.5870 * image_tensor[:, 1:2] + 0.1140 * image_tensor[:, 2:3]
+    sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=gray.dtype, device=gray.device).view(1, 1, 3, 3)
+    sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=gray.dtype, device=gray.device).view(1, 1, 3, 3)
+    grad_x = F.conv2d(gray, sobel_x, padding=1)
+    grad_y = F.conv2d(gray, sobel_y, padding=1)
+    magnitude = torch.sqrt(grad_x ** 2 + grad_y ** 2 + 1e-6)
+    magnitude = magnitude / (magnitude.amax(dim=(2, 3), keepdim=True) + 1e-6)
+    return magnitude.clamp(0, 1)
 
 
 def is_char_in_font(font_path, char):

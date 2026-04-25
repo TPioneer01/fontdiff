@@ -18,11 +18,13 @@ from dataset.collate_fn import CollateFN
 from configs.fontdiffuser import get_parser
 from src import (FontDiffuserModel,
                  ContentPerceptualLoss,
+                 EdgeConsistencyLoss,
                  build_unet,
                  build_style_encoder,
                  build_content_encoder,
                  build_ddpm_scheduler,
-                 build_scr)
+                 build_scr,
+                 build_edge_injector)
 from utils import (save_args_to_yaml,
                    x0_from_epsilon, 
                    reNormalize_img, 
@@ -74,18 +76,24 @@ def main():
     style_encoder = build_style_encoder(args=args)
     content_encoder = build_content_encoder(args=args)
     noise_scheduler = build_ddpm_scheduler(args)
+    edge_injector = build_edge_injector(args)
     if args.phase_2:
         unet.load_state_dict(torch.load(f"{args.phase_1_ckpt_dir}/unet.pth"))
         style_encoder.load_state_dict(torch.load(f"{args.phase_1_ckpt_dir}/style_encoder.pth"))
         content_encoder.load_state_dict(torch.load(f"{args.phase_1_ckpt_dir}/content_encoder.pth"))
+        edge_injector_path = f"{args.phase_1_ckpt_dir}/edge_injector.pth"
+        if os.path.exists(edge_injector_path):
+            edge_injector.load_state_dict(torch.load(edge_injector_path))
 
     model = FontDiffuserModel(
         unet=unet,
         style_encoder=style_encoder,
-        content_encoder=content_encoder)
+        content_encoder=content_encoder,
+        edge_injector=edge_injector)
 
     # Build content perceptaual Loss
     perceptual_loss = ContentPerceptualLoss()
+    edge_loss = EdgeConsistencyLoss()
 
     # Load SCR module for supervision
     if args.phase_2:
@@ -165,6 +173,9 @@ def main():
             style_images = samples["style_image"]
             target_images = samples["target_image"]
             nonorm_target_images = samples["nonorm_target_image"]
+            content_edges = samples["content_edge"]
+            style_edges = samples["style_edge"]
+            target_edges = samples["target_edge"]
             
             with accelerator.accumulate(model):
                 # Sample noise that we'll add to the samples
@@ -184,6 +195,8 @@ def main():
                     if mask_value==1:
                         content_images[i, :, :, :] = 1
                         style_images[i, :, :, :] = 1
+                        content_edges[i, :, :, :] = 0
+                        style_edges[i, :, :, :] = 0
 
                 # Predict the noise residual and compute loss
                 noise_pred, offset_out_sum = model(
@@ -191,7 +204,9 @@ def main():
                     timesteps=timesteps, 
                     style_images=style_images,
                     content_images=content_images,
-                    content_encoder_downsample_size=args.content_encoder_downsample_size)
+                    content_encoder_downsample_size=args.content_encoder_downsample_size,
+                    content_edge=content_edges,
+                    style_edge=style_edges)
                 diff_loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
                 offset_loss = offset_out_sum / 2
                 
@@ -208,10 +223,14 @@ def main():
                     generated_images=norm_pred_ori,
                     target_images=norm_target_ori,
                     device=target_images.device)
+                e_loss = edge_loss.calculate_loss(
+                    generated_images=pred_original_sample_norm,
+                    target_edges=target_edges)
                 
                 loss = diff_loss + \
                         args.perceptual_coefficient * percep_loss + \
-                            args.offset_coefficient * offset_loss
+                        args.offset_coefficient * offset_loss + \
+                        args.edge_coefficient * e_loss
                 
                 if args.phase_2:
                     neg_images = samples["neg_images"]
@@ -253,6 +272,7 @@ def main():
                         torch.save(model.unet.state_dict(), f"{save_dir}/unet.pth")
                         torch.save(model.style_encoder.state_dict(), f"{save_dir}/style_encoder.pth")
                         torch.save(model.content_encoder.state_dict(), f"{save_dir}/content_encoder.pth")
+                        torch.save(model.edge_injector.state_dict(), f"{save_dir}/edge_injector.pth")
                         torch.save(model, f"{save_dir}/total_model.pth")
                         logging.info(f"[{time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))}] Save the checkpoint on global step {global_step}")
                         print("Save the checkpoint on global step {}".format(global_step))

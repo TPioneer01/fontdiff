@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
 import torchvision 
+import torch.nn.functional as F
+
+from utils import edge_from_tensor
 
 
 class VGG16(nn.Module):
@@ -42,3 +45,19 @@ class ContentPerceptualLoss(nn.Module):
         perceptual_loss += torch.mean((target_features[2] - generated_features[2]) ** 2)
         perceptual_loss /= 3
         return perceptual_loss
+
+
+class EdgeConsistencyLoss(nn.Module):
+    """Multi-scale edge consistency to preserve glyph structure."""
+
+    def __init__(self):
+        super().__init__()
+
+    def calculate_loss(self, generated_images, target_edges):
+        generated_edges = edge_from_tensor(generated_images)
+        loss = F.l1_loss(generated_edges, target_edges)
+        for _ in range(2):
+            generated_edges = F.avg_pool2d(generated_edges, kernel_size=2, stride=2)
+            target_edges = F.avg_pool2d(target_edges, kernel_size=2, stride=2)
+            loss = loss + F.l1_loss(generated_edges, target_edges)
+        return loss / 3.0

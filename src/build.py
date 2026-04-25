@@ -2,7 +2,8 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from src import (ContentEncoder, 
                  StyleEncoder, 
                  UNet,
-                 SCR)
+                 SCR,
+                 EdgeFeatureInjector)
 
 
 def build_unet(args):
@@ -60,6 +61,16 @@ def build_scr(args):
         image_size=args.scr_image_size)
     print("Loaded SCR module for supervision successfully!")
     return scr
+
+
+def build_edge_injector(args):
+    channel_list = [3]
+    for i in range(args.content_encoder_downsample_size):
+        channel_list.append(args.content_start_channel * (2 ** i))
+    channel_list.append(args.content_start_channel * (2 ** (args.content_encoder_downsample_size - 1)))
+    edge_injector = EdgeFeatureInjector(channel_list=channel_list, init_scale=args.edge_condition_scale)
+    print("Loaded Edge Feature Injector successfully!")
+    return edge_injector
 
 
 def build_ddpm_scheduler(args):

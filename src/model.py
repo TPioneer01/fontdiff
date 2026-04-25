@@ -17,11 +17,13 @@ class FontDiffuserModel(ModelMixin, ConfigMixin):
         unet, 
         style_encoder,
         content_encoder,
+        edge_injector=None,
     ):
         super().__init__()
         self.unet = unet
         self.style_encoder = style_encoder
         self.content_encoder = content_encoder
+        self.edge_injector = edge_injector
     
     def forward(
         self, 
@@ -30,6 +32,8 @@ class FontDiffuserModel(ModelMixin, ConfigMixin):
         style_images,
         content_images,
         content_encoder_downsample_size,
+        content_edge=None,
+        style_edge=None,
     ):
         style_img_feature, _, _ = self.style_encoder(style_images)
     
@@ -42,6 +46,10 @@ class FontDiffuserModel(ModelMixin, ConfigMixin):
         # Get the content feature from reference image
         style_content_feature, style_content_res_features = self.content_encoder(style_images)
         style_content_res_features.append(style_content_feature)
+
+        if self.edge_injector is not None and content_edge is not None and style_edge is not None:
+            content_residual_features = self.edge_injector(content_edge, content_residual_features)
+            style_content_res_features = self.edge_injector(style_edge, style_content_res_features)
 
         input_hidden_states = [style_img_feature, content_residual_features, \
                                style_hidden_states, style_content_res_features]
@@ -68,11 +76,13 @@ class FontDiffuserModelDPM(ModelMixin, ConfigMixin):
         unet, 
         style_encoder,
         content_encoder,
+        edge_injector=None,
     ):
         super().__init__()
         self.unet = unet
         self.style_encoder = style_encoder
         self.content_encoder = content_encoder
+        self.edge_injector = edge_injector
     
     def forward(
         self, 
@@ -84,6 +94,8 @@ class FontDiffuserModelDPM(ModelMixin, ConfigMixin):
     ):
         content_images = cond[0]
         style_images = cond[1]
+        content_edge = cond[2] if len(cond) > 2 else None
+        style_edge = cond[3] if len(cond) > 3 else None
 
         style_img_feature, _, style_residual_features = self.style_encoder(style_images)
         
@@ -96,6 +108,10 @@ class FontDiffuserModelDPM(ModelMixin, ConfigMixin):
         # Get the content feature from reference image
         style_content_feature, style_content_res_features = self.content_encoder(style_images)
         style_content_res_features.append(style_content_feature)
+
+        if self.edge_injector is not None and content_edge is not None and style_edge is not None:
+            content_residual_features = self.edge_injector(content_edge, content_residual_features)
+            style_content_res_features = self.edge_injector(style_edge, style_content_res_features)
 
         input_hidden_states = [style_img_feature, content_residual_features, style_hidden_states, style_content_res_features]
 

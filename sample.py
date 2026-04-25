@@ -14,13 +14,15 @@ from src import (FontDiffuserDPMPipeline,
                  build_ddpm_scheduler,
                  build_unet,
                  build_content_encoder,
-                 build_style_encoder)
+                 build_style_encoder,
+                 build_edge_injector)
 from utils import (ttf2im,
                    load_ttf,
                    is_char_in_font,
                    save_args_to_yaml,
                    save_single_image,
-                   save_image_with_content_style)
+                   save_image_with_content_style,
+                   edge_from_tensor)
 
 
 def arg_parse():
@@ -99,10 +101,15 @@ def load_fontdiffuer_pipeline(args):
     style_encoder.load_state_dict(torch.load(f"{args.ckpt_dir}/style_encoder.pth"))
     content_encoder = build_content_encoder(args=args)
     content_encoder.load_state_dict(torch.load(f"{args.ckpt_dir}/content_encoder.pth"))
+    edge_injector = build_edge_injector(args=args)
+    edge_injector_path = f"{args.ckpt_dir}/edge_injector.pth"
+    if os.path.exists(edge_injector_path):
+        edge_injector.load_state_dict(torch.load(edge_injector_path))
     model = FontDiffuserModelDPM(
         unet=unet,
         style_encoder=style_encoder,
-        content_encoder=content_encoder)
+        content_encoder=content_encoder,
+        edge_injector=edge_injector)
     model.to(args.device)
     print("Loaded the model state_dict successfully!")
 
@@ -148,6 +155,8 @@ def sampling(args, pipe, content_image=None, style_image=None):
         images = pipe.generate(
             content_images=content_image,
             style_images=style_image,
+            content_edges=edge_from_tensor(content_image),
+            style_edges=edge_from_tensor(style_image),
             batch_size=1,
             order=args.order,
             num_inference_step=args.num_inference_steps,

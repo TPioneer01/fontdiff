@@ -48,6 +48,8 @@ def get_parser():
     ## loss coefficient
     parser.add_argument("--perceptual_coefficient", type=float, default=0.01)
     parser.add_argument("--offset_coefficient", type=float, default=0.5)
+    parser.add_argument("--edge_coefficient", type=float, default=0.1, help="Coefficient of edge consistency loss.")
+    parser.add_argument("--edge_condition_scale", type=float, default=0.1, help="Initial strength of edge injection.")
     ## step
     parser.add_argument("--max_train_steps", type=int, default=440000, 
                         help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",)
