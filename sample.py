@@ -23,6 +23,36 @@ from utils import (ttf2im,
                    save_image_with_content_style)
 
 
+def resolve_runtime_device(device_preference="auto"):
+    """Resolve runtime device with graceful CPU fallback.
+
+    Supported values: auto, cpu, cuda, cuda:0, gpu.
+    """
+    preference = str(device_preference).strip().lower() if device_preference is not None else "auto"
+    cuda_available = torch.cuda.is_available()
+
+    if preference in ["", "auto"]:
+        resolved = "cuda:0" if cuda_available else "cpu"
+        message = f"Auto selected '{resolved}' (CUDA available: {cuda_available})."
+        return resolved, message
+
+    if preference == "gpu":
+        preference = "cuda:0"
+
+    if preference.startswith("cuda"):
+        if cuda_available:
+            return preference, f"Using requested device '{preference}'."
+        return "cpu", "CUDA device requested but CUDA is unavailable. Switched to CPU."
+
+    if preference == "cpu":
+        return "cpu", "Using requested device 'cpu'."
+
+    # Final safety net for any unexpected value.
+    return ("cuda:0", f"Unknown device '{device_preference}'. Switched to 'cuda:0'.") if cuda_available else (
+        "cpu", f"Unknown device '{device_preference}' and CUDA unavailable. Switched to 'cpu'."
+    )
+
+
 def arg_parse():
     from configs.fontdiffuser import get_parser
 
@@ -38,7 +68,8 @@ def arg_parse():
     parser.add_argument("--save_image", action="store_true")
     parser.add_argument("--save_image_dir", type=str, default=None,
                         help="The saving directory.")
-    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument("--device", type=str, default="auto",
+                        help="Runtime device: auto | cpu | cuda:0")
     parser.add_argument("--ttf_path", type=str, default="ttf/KaiXinSongA.ttf")
     args = parser.parse_args()
     style_image_size = args.style_image_size
@@ -46,6 +77,7 @@ def arg_parse():
     args.style_image_size = (style_image_size, style_image_size)
     args.content_image_size = (content_image_size, content_image_size)
 
+    args.device, args.device_message = resolve_runtime_device(args.device)
     return args
 
 
@@ -92,19 +124,21 @@ def image_process(args, content_image=None, style_image=None):
     return content_image, style_image, content_image_pil
 
 def load_fontdiffuer_pipeline(args):
+    device = torch.device(args.device)
+
     # Load the model state_dict
     unet = build_unet(args=args)
-    unet.load_state_dict(torch.load(f"{args.ckpt_dir}/unet.pth"))
+    unet.load_state_dict(torch.load(f"{args.ckpt_dir}/unet.pth", map_location=device))
     style_encoder = build_style_encoder(args=args)
-    style_encoder.load_state_dict(torch.load(f"{args.ckpt_dir}/style_encoder.pth"))
+    style_encoder.load_state_dict(torch.load(f"{args.ckpt_dir}/style_encoder.pth", map_location=device))
     content_encoder = build_content_encoder(args=args)
-    content_encoder.load_state_dict(torch.load(f"{args.ckpt_dir}/content_encoder.pth"))
+    content_encoder.load_state_dict(torch.load(f"{args.ckpt_dir}/content_encoder.pth", map_location=device))
     model = FontDiffuserModelDPM(
         unet=unet,
         style_encoder=style_encoder,
         content_encoder=content_encoder)
-    model.to(args.device)
-    print("Loaded the model state_dict successfully!")
+    model.to(device)
+    print(f"Loaded the model state_dict successfully on {device}!")
 
     # Load the training ddpm_scheduler.
     train_scheduler = build_ddpm_scheduler(args=args)
@@ -188,17 +222,21 @@ def load_controlnet_pipeline(args,
     from diffusers import ControlNetModel, AutoencoderKL
     # load controlnet model and pipeline
     from diffusers import StableDiffusionControlNetPipeline, UniPCMultistepScheduler
+    dtype = torch.float16 if str(args.device).startswith("cuda") and torch.cuda.is_available() else torch.float32
     controlnet = ControlNetModel.from_pretrained(config_path, 
-                                                 torch_dtype=torch.float16,
+                                                 torch_dtype=dtype,
                                                  cache_dir=f"{args.ckpt_dir}/controlnet")
     print(f"Loaded ControlNet Model Successfully!")
     pipe = StableDiffusionControlNetPipeline.from_pretrained(ckpt_path, 
                                                              controlnet=controlnet, 
-                                                             torch_dtype=torch.float16,
+                                                             torch_dtype=dtype,
                                                              cache_dir=f"{args.ckpt_dir}/controlnet_pipeline")
     # faster
     pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
-    pipe.enable_model_cpu_offload()
+    if str(args.device).startswith("cuda") and torch.cuda.is_available():
+        pipe.enable_model_cpu_offload()
+    else:
+        pipe.to("cpu")
     print(f"Loaded ControlNet Pipeline Successfully!")
 
     return pipe
@@ -227,8 +265,9 @@ def controlnet(text_prompt,
 def load_instructpix2pix_pipeline(args,
                                   ckpt_path="timbrooks/instruct-pix2pix"):
     from diffusers import StableDiffusionInstructPix2PixPipeline, EulerAncestralDiscreteScheduler
+    dtype = torch.float16 if str(args.device).startswith("cuda") and torch.cuda.is_available() else torch.float32
     pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(ckpt_path, 
-                                                                  torch_dtype=torch.float16)
+                                                                  torch_dtype=dtype)
     pipe.to(args.device)
     pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(pipe.scheduler.config)
 

@@ -2,7 +2,8 @@ import random
 import gradio as gr
 from sample import (arg_parse, 
                     sampling,
-                    load_fontdiffuer_pipeline)
+                    load_fontdiffuer_pipeline,
+                    resolve_runtime_device)
 
 
 def run_fontdiffuer(source_image, 
@@ -10,10 +11,18 @@ def run_fontdiffuer(source_image,
                     reference_image,
                     sampling_step,
                     guidance_scale,
-                    batch_size):
+                    batch_size,
+                    device_mode):
+    global pipe
+
+    resolved_device, device_message = resolve_runtime_device(device_mode)
+    if resolved_device != args.device:
+        args.device = resolved_device
+        pipe = load_fontdiffuer_pipeline(args=args)
+
     args.character_input = False if source_image is not None else True
     args.content_character = character
-    args.sampling_step = sampling_step
+    args.num_inference_steps = int(sampling_step)
     args.guidance_scale = guidance_scale
     args.batch_size = batch_size
     args.seed = random.randint(0, 10000)
@@ -22,7 +31,8 @@ def run_fontdiffuer(source_image,
         pipe=pipe,
         content_image=source_image,
         style_image=reference_image)
-    return out_image
+    status = f"{device_message} Current runtime device: {args.device}."
+    return out_image, status
 
 
 if __name__ == '__main__':
@@ -33,6 +43,7 @@ if __name__ == '__main__':
 
     # load fontdiffuer pipeline
     pipe = load_fontdiffuer_pipeline(args=args)
+    device_status_default = f"{args.device_message} Current runtime device: {args.device}."
 
     with gr.Blocks() as demo:
         with gr.Row():
@@ -76,6 +87,19 @@ if __name__ == '__main__':
                     character = gr.Textbox(value='隆', label='[Option 2] Source Character')
                 with gr.Row():
                     fontdiffuer_output_image = gr.Image(height=200, label="FontDiffuser Output Image", image_mode='RGB', type='pil')
+                with gr.Row():
+                    device_mode = gr.Dropdown(
+                        choices=["auto", "cpu", "cuda:0"],
+                        value=args.device,
+                        label="Runtime Device",
+                        info="Choose auto/cpu/cuda:0. If CUDA is unavailable, selecting cuda:0 falls back to CPU."
+                    )
+                with gr.Row():
+                    runtime_status = gr.Textbox(
+                        value=device_status_default,
+                        label="Runtime Status",
+                        interactive=False
+                    )
 
                 sampling_step = gr.Slider(20, 50, value=20, step=10, 
                                           label="Sampling Step", info="The sampling step by FontDiffuser.")
@@ -144,6 +168,16 @@ if __name__ == '__main__':
                     reference_image,
                     sampling_step,
                     guidance_scale,
-                    batch_size],
-            outputs=fontdiffuer_output_image)
-    demo.launch(debug=True)
+                    batch_size,
+                    device_mode],
+            outputs=[fontdiffuer_output_image, runtime_status],
+            api_name=False)
+
+    try:
+        demo.launch(debug=True, show_api=False, share=False, server_name="127.0.0.1", inbrowser=True)
+    except ValueError as launch_error:
+        if "localhost is not accessible" in str(launch_error):
+            print("Localhost is not accessible. Retrying with share link enabled.")
+            demo.launch(debug=True, show_api=False, share=True, inbrowser=True)
+        else:
+            raise
