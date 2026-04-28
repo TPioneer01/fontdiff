@@ -30,15 +30,33 @@ class FontDiffuserModel(ModelMixin, ConfigMixin):
         nn.init.zeros_(self.edge_adapter_style.weight)
         nn.init.zeros_(self.edge_adapter_style.bias)
         
-        # Safely set edge_fusion_scale as nn.Parameter, avoiding conflicts with @register_to_config
-        if not hasattr(self, 'edge_fusion_scale') or not isinstance(getattr(self, 'edge_fusion_scale', None), nn.Parameter):
-            self.edge_fusion_scale = nn.Parameter(torch.tensor(edge_fusion_scale, dtype=torch.float32))
+        # Use internal parameter name to avoid conflicts with @register_to_config
+        # The config maintains edge_fusion_scale, but we store as _edge_fusion_scale_param
+        self._edge_fusion_scale_param = nn.Parameter(torch.tensor(edge_fusion_scale, dtype=torch.float32))
+    
+    @property
+    def edge_fusion_scale(self):
+        """Public interface to access edge_fusion_scale as parameter"""
+        return self._edge_fusion_scale_param
+    
+    @edge_fusion_scale.setter
+    def edge_fusion_scale(self, value):
+        """Public setter for edge_fusion_scale"""
+        if isinstance(value, nn.Parameter):
+            self._edge_fusion_scale_param = value
+        elif isinstance(value, torch.Tensor):
+            if not isinstance(self._edge_fusion_scale_param, nn.Parameter):
+                self._edge_fusion_scale_param = nn.Parameter(value)
+            else:
+                self._edge_fusion_scale_param.data.copy_(value)
+        else:
+            self._edge_fusion_scale_param = nn.Parameter(torch.tensor(value, dtype=torch.float32))
 
     def _inject_edge(self, image, edge_map, adapter):
         if edge_map is None:
             return image
         edge_residual = torch.tanh(adapter(edge_map))
-        fused = image + self.edge_fusion_scale * edge_residual
+        fused = image + self._edge_fusion_scale_param * edge_residual
         return fused.clamp(-1.0, 1.0)
     
     def forward(
@@ -104,15 +122,33 @@ class FontDiffuserModelDPM(ModelMixin, ConfigMixin):
         nn.init.zeros_(self.edge_adapter_style.weight)
         nn.init.zeros_(self.edge_adapter_style.bias)
         
-        # Safely set edge_fusion_scale as nn.Parameter, avoiding conflicts with @register_to_config
-        if not hasattr(self, 'edge_fusion_scale') or not isinstance(getattr(self, 'edge_fusion_scale', None), nn.Parameter):
-            self.edge_fusion_scale = nn.Parameter(torch.tensor(edge_fusion_scale, dtype=torch.float32))
+        # Use internal parameter name to avoid conflicts with @register_to_config
+        # The config maintains edge_fusion_scale, but we store as _edge_fusion_scale_param
+        self._edge_fusion_scale_param = nn.Parameter(torch.tensor(edge_fusion_scale, dtype=torch.float32))
+    
+    @property
+    def edge_fusion_scale(self):
+        """Public interface to access edge_fusion_scale as parameter"""
+        return self._edge_fusion_scale_param
+    
+    @edge_fusion_scale.setter
+    def edge_fusion_scale(self, value):
+        """Public setter for edge_fusion_scale"""
+        if isinstance(value, nn.Parameter):
+            self._edge_fusion_scale_param = value
+        elif isinstance(value, torch.Tensor):
+            if not isinstance(self._edge_fusion_scale_param, nn.Parameter):
+                self._edge_fusion_scale_param = nn.Parameter(value)
+            else:
+                self._edge_fusion_scale_param.data.copy_(value)
+        else:
+            self._edge_fusion_scale_param = nn.Parameter(torch.tensor(value, dtype=torch.float32))
 
     def _inject_edge(self, image, edge_map, adapter):
         if edge_map is None:
             return image
         edge_residual = torch.tanh(adapter(edge_map))
-        fused = image + self.edge_fusion_scale * edge_residual
+        fused = image + self._edge_fusion_scale_param * edge_residual
         return fused.clamp(-1.0, 1.0)
     
     def forward(

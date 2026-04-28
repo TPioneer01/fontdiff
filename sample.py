@@ -170,11 +170,9 @@ def load_fontdiffuer_pipeline(args):
             if "content_adapter" in edge_state and "style_adapter" in edge_state and "fusion_scale" in edge_state:
                 model.edge_adapter_content.load_state_dict(edge_state["content_adapter"])
                 model.edge_adapter_style.load_state_dict(edge_state["style_adapter"])
-                # Safely update edge_fusion_scale using state_dict
+                # Safely update edge_fusion_scale using the property setter
                 try:
-                    full_state = model.state_dict()
-                    full_state['edge_fusion_scale'] = edge_state["fusion_scale"].to(device)
-                    model.load_state_dict(full_state, strict=False)
+                    model.edge_fusion_scale = edge_state["fusion_scale"].to(device)
                 except Exception as e:
                     print(f"[Warning] Could not update edge_fusion_scale: {e}")
             else:
