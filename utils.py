@@ -42,6 +42,59 @@ def save_image_with_content_style(save_dir, image, content_image_pil, content_im
     new_image.save(save_path)
 
 
+def save_inference_batch_results(save_dir, generated_images, content_images_pil, style_images_pil, 
+                                  sample_indices=None, resolution=96):
+    """
+    Save batch of inference results with content, style, and generated images side-by-side.
+    
+    Args:
+        save_dir: Directory to save results
+        generated_images: Tensor or list of PIL Images (generated outputs)
+        content_images_pil: List of PIL Images (content inputs)
+        style_images_pil: List of PIL Images (style inputs)
+        sample_indices: List of indices for naming (e.g., [0, 5, 10])
+        resolution: Image resolution
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Handle tensor to PIL conversion if needed
+    if isinstance(generated_images, torch.Tensor):
+        generated_images = [
+            Image.fromarray((img.clamp(0, 1).cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+            for img in generated_images
+        ]
+    
+    num_samples = len(generated_images)
+    if sample_indices is None:
+        sample_indices = list(range(num_samples))
+    
+    for idx, (gen_img, cnt_img, sty_img, sample_id) in enumerate(
+        zip(generated_images, content_images_pil, style_images_pil, sample_indices)
+    ):
+        # Create concatenated image: content | style | generated
+        concat_image = Image.new('RGB', (resolution * 3, resolution))
+        
+        # Ensure PIL format
+        if not isinstance(cnt_img, Image.Image):
+            cnt_img = Image.fromarray(cnt_img) if isinstance(cnt_img, np.ndarray) else cnt_img
+        if not isinstance(sty_img, Image.Image):
+            sty_img = Image.fromarray(sty_img) if isinstance(sty_img, np.ndarray) else sty_img
+        if not isinstance(gen_img, Image.Image):
+            gen_img = Image.fromarray(gen_img) if isinstance(gen_img, np.ndarray) else gen_img
+        
+        # Resize to match resolution if needed
+        cnt_img = cnt_img.resize((resolution, resolution), Image.BILINEAR) if cnt_img.size != (resolution, resolution) else cnt_img
+        sty_img = sty_img.resize((resolution, resolution), Image.BILINEAR) if sty_img.size != (resolution, resolution) else sty_img
+        gen_img = gen_img.resize((resolution, resolution), Image.BILINEAR) if gen_img.size != (resolution, resolution) else gen_img
+        
+        concat_image.paste(cnt_img, (0, 0))
+        concat_image.paste(sty_img, (resolution, 0))
+        concat_image.paste(gen_img, (resolution * 2, 0))
+        
+        # Save with sample index
+        concat_image.save(f"{save_dir}/inference_sample_{sample_id:03d}.jpg")
+
+
 def x0_from_epsilon(scheduler, noise_pred, x_t, timesteps):
     """Return the x_0 from epsilon
     """

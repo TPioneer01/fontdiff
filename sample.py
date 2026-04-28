@@ -324,6 +324,86 @@ def instructpix2pix(pil_image, text_prompt, pipe):
     return image
 
 
+def inference_on_dataset_samples(args, pipe, train_dataset, device, num_samples=3, seed=42):
+    """
+    Perform inference on random samples from training dataset during training.
+    
+    Args:
+        args: Training arguments
+        pipe: FontDiffuserDPMPipeline instance
+        train_dataset: FontDataset instance for sampling
+        device: Device to run inference on
+        num_samples: Number of samples to infer
+        seed: Random seed for reproducibility
+    
+    Returns:
+        Tuple of (generated_images, content_images_pil, style_images_pil, sample_indices)
+    """
+    import random as py_random
+    
+    # Set seed for reproducibility
+    py_random.seed(seed)
+    dataset_size = len(train_dataset)
+    sample_indices = py_random.sample(range(dataset_size), min(num_samples, dataset_size))
+    
+    generated_images = []
+    content_images_pil = []
+    style_images_pil = []
+    
+    with torch.no_grad():
+        for sample_idx in sample_indices:
+            # Load sample from dataset
+            sample = train_dataset[sample_idx]
+            
+            # Extract and prepare tensors
+            content_image = sample["content_image"].unsqueeze(0).to(device)  # Add batch dim
+            style_image = sample["style_image"].unsqueeze(0).to(device)
+            content_edge = sample["content_edge"].unsqueeze(0).to(device)
+            style_edge = sample["style_edge"].unsqueeze(0).to(device)
+            
+            # Convert normalized tensors back to PIL for display
+            # (training tensors are normalized to [-1, 1])
+            def tensor_to_pil(tensor_normalized):
+                # tensor_normalized is in [-1, 1] range after training transforms
+                tensor_img = ((tensor_normalized + 1) / 2).clamp(0, 1)  # Convert to [0, 1]
+                tensor_img = (tensor_img * 255).permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+                return Image.fromarray(tensor_img)
+            
+            content_pil = tensor_to_pil(content_image.squeeze(0))
+            style_pil = tensor_to_pil(style_image.squeeze(0))
+            
+            content_images_pil.append(content_pil)
+            style_images_pil.append(style_pil)
+            
+            try:
+                # Run inference
+                print(f"[Inference] Sampling for dataset index {sample_idx}...")
+                gen_images = pipe.generate(
+                    content_images=content_image,
+                    style_images=style_image,
+                    content_edges=content_edge,
+                    style_edges=style_edge,
+                    batch_size=1,
+                    order=args.order,
+                    num_inference_step=args.num_inference_steps,
+                    content_encoder_downsample_size=args.content_encoder_downsample_size,
+                    t_start=args.t_start,
+                    t_end=args.t_end,
+                    dm_size=args.content_image_size,
+                    algorithm_type=args.algorithm_type,
+                    skip_type=args.skip_type,
+                    method=args.method,
+                    correcting_x0_fn=args.correcting_x0_fn
+                )
+                generated_images.append(gen_images[0])
+            except Exception as e:
+                print(f"[Inference Error] Failed for sample {sample_idx}: {e}")
+                # Add blank image as placeholder on error
+                generated_images.append(Image.new('RGB', (args.resolution, args.resolution)))
+    
+    return generated_images, content_images_pil, style_images_pil, sample_indices
+
+
 if __name__=="__main__":
     args = arg_parse()
     

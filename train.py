@@ -2,6 +2,7 @@ import os
 import math
 import time
 import logging
+import csv
 from tqdm.auto import tqdm
 
 import torch
@@ -17,17 +18,21 @@ from dataset.font_dataset import FontDataset
 from dataset.collate_fn import CollateFN
 from configs.fontdiffuser import get_parser
 from src import (FontDiffuserModel,
+                 FontDiffuserDPMPipeline,
+                 FontDiffuserModelDPM,
                  ContentPerceptualLoss,
                  EdgeConsistencyLoss,
                  build_unet,
                  build_style_encoder,
                  build_content_encoder,
-                 build_ddpm_scheduler,
-                 build_scr)
+                 build_ddpm_scheduler)
+from src import build_scr
 from utils import (save_args_to_yaml,
                    x0_from_epsilon, 
                    reNormalize_img, 
-                   normalize_mean_std)
+                   normalize_mean_std,
+                   save_inference_batch_results)
+from sample import inference_on_dataset_samples
 
 
 logger = get_logger(__name__)
@@ -163,6 +168,37 @@ def main():
         accelerator.init_trackers(args.experience_name)
         save_args_to_yaml(args=args, output_file=f"{args.output_dir}/{args.experience_name}_config.yaml")
 
+    # ============ Initialize loss history tracking for detailed logging ============
+    loss_history = []  # List of dicts: {'step': int, 'diff_loss': float, ...}
+    loss_csv_path = f"{args.output_dir}/loss_breakdown.csv"
+    
+    # ============ Initialize inference pipeline for training-time monitoring ============
+    inference_pipe = None
+    if args.inference_during_training and accelerator.is_main_process:
+        try:
+            unet_temp = build_unet(args=args)
+            style_encoder_temp = build_style_encoder(args=args)
+            content_encoder_temp = build_content_encoder(args=args)
+            model_dpm = FontDiffuserModelDPM(
+                unet=unet_temp,
+                style_encoder=style_encoder_temp,
+                content_encoder=content_encoder_temp,
+                edge_fusion_scale=args.edge_fusion_scale
+            )
+            # Load trained weights into DPM model (will be updated after each checkpoint)
+            noise_scheduler_infer = build_ddpm_scheduler(args)
+            inference_pipe = FontDiffuserDPMPipeline(
+                model=model_dpm,
+                ddpm_train_scheduler=noise_scheduler_infer,
+                model_type=args.model_type,
+                guidance_type=args.guidance_type,
+                guidance_scale=args.guidance_scale,
+            )
+            print("[Inference Pipeline] Initialized for training-time monitoring")
+        except Exception as e:
+            print(f"[Warning] Failed to initialize inference pipeline: {e}")
+            args.inference_during_training = False
+
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
@@ -232,11 +268,21 @@ def main():
                     device=target_images.device)
                 edge_loss = edge_loss_fn(pred_original_sample, nonorm_target_images, target_edge_maps=target_edges)
                 
+                # ========== Compute total loss and track components ==========
                 loss = diff_loss + \
                         args.perceptual_coefficient * percep_loss + \
                             args.offset_coefficient * offset_loss + \
                             args.edge_coefficient * edge_loss
                 
+                # Track loss components for detailed logging
+                loss_components = {
+                    'diff_loss': diff_loss.detach().item(),
+                    'percep_loss': percep_loss.detach().item(),
+                    'offset_loss': offset_loss.detach().item(),
+                    'edge_loss': edge_loss.detach().item(),
+                }
+                
+                sc_loss = None
                 if args.phase_2:
                     neg_images = samples["neg_images"]
                     # sc loss
@@ -250,6 +296,7 @@ def main():
                         pos_s=pos_style_embeddings,
                         neg_s=neg_style_embeddings)
                     loss += args.sc_coefficient * sc_loss
+                    loss_components['sc_loss'] = sc_loss.detach().item()
 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
@@ -288,10 +335,80 @@ def main():
                         torch.save(model, f"{save_dir}/total_model.pth")
                         logging.info(f"[{time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))}] Save the checkpoint on global step {global_step}")
                         print("Save the checkpoint on global step {}".format(global_step))
+                        
+                        # ========== Perform inference on dataset samples ==========
+                        if args.inference_during_training and inference_pipe is not None:
+                            try:
+                                print(f"[Checkpoint {global_step}] Performing inference on dataset samples...")
+                                
+                                # Update inference pipeline with current model weights
+                                inference_pipe.model.unet.load_state_dict(model.unet.state_dict())
+                                inference_pipe.model.style_encoder.load_state_dict(model.style_encoder.state_dict())
+                                inference_pipe.model.content_encoder.load_state_dict(model.content_encoder.state_dict())
+                                inference_pipe.model.edge_adapter_content.load_state_dict(model.edge_adapter_content.state_dict())
+                                inference_pipe.model.edge_adapter_style.load_state_dict(model.edge_adapter_style.state_dict())
+                                inference_pipe.model.edge_fusion_scale.data.copy_(model.edge_fusion_scale.detach())
+                                inference_pipe.model.to(accelerator.device)
+                                
+                                # Run inference
+                                gen_images, cnt_images, sty_images, sample_ids = inference_on_dataset_samples(
+                                    args=args,
+                                    pipe=inference_pipe,
+                                    train_dataset=train_font_dataset,
+                                    device=accelerator.device,
+                                    num_samples=args.num_inference_samples,
+                                    seed=args.inference_seed + global_step  # Vary seed per checkpoint
+                                )
+                                
+                                # Save inference results
+                                inference_save_dir = f"{save_dir}/inference_samples"
+                                save_inference_batch_results(
+                                    save_dir=inference_save_dir,
+                                    generated_images=gen_images,
+                                    content_images_pil=cnt_images,
+                                    style_images_pil=sty_images,
+                                    sample_indices=sample_ids,
+                                    resolution=args.resolution
+                                )
+                                print(f"[Checkpoint {global_step}] Inference results saved to {inference_save_dir}")
+                                logging.info(f"Inference samples saved at checkpoint {global_step}")
+                                
+                            except Exception as e:
+                                print(f"[Checkpoint {global_step}] Inference failed: {e}")
+                                logging.warning(f"Inference error at checkpoint {global_step}: {e}")
 
             logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             if global_step % args.log_interval == 0:
-                logging.info(f"[{time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))}] Global Step {global_step} => train_loss = {loss}")
+                # ========== Detailed loss component logging ==========
+                log_msg = f"[{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}] " \
+                          f"Global Step {global_step} | Total Loss: {loss.detach().item():.6f} | " \
+                          f"diff_loss: {loss_components['diff_loss']:.6f} | " \
+                          f"percep_loss: {loss_components['percep_loss']:.6f} | " \
+                          f"offset_loss: {loss_components['offset_loss']:.6f} | " \
+                          f"edge_loss: {loss_components['edge_loss']:.6f}"
+                if args.phase_2 and 'sc_loss' in loss_components:
+                    log_msg += f" | sc_loss: {loss_components['sc_loss']:.6f}"
+                
+                logging.info(log_msg)
+                print(log_msg)
+                
+                # ========== Store loss components for CSV export ==========
+                log_entry = {'step': global_step}
+                log_entry.update(loss_components)
+                loss_history.append(log_entry)
+                
+                # ========== Log to TensorBoard ==========
+                accelerator.log(
+                    {
+                        "train_loss": loss.detach().item(),
+                        "diff_loss": loss_components['diff_loss'],
+                        "percep_loss": loss_components['percep_loss'],
+                        "offset_loss": loss_components['offset_loss'],
+                        "edge_loss": loss_components['edge_loss'],
+                        **({"sc_loss": loss_components['sc_loss']} if 'sc_loss' in loss_components else {})
+                    },
+                    step=global_step
+                )
             progress_bar.set_postfix(**logs)
             
             # Quit
@@ -299,6 +416,26 @@ def main():
                 break
 
     accelerator.end_training()
+    
+    # ========== Export loss history to CSV ==========
+    if accelerator.is_main_process and loss_history:
+        try:
+            import pandas as pd
+            df = pd.DataFrame(loss_history)
+            df.to_csv(loss_csv_path, index=False)
+            print(f"\n[Training Complete] Loss breakdown saved to: {loss_csv_path}")
+            logging.info(f"Loss history exported to {loss_csv_path}")
+        except ImportError:
+            # Fallback to csv module if pandas not available
+            print(f"\n[Training Complete] Exporting loss history using csv module...")
+            if loss_history:
+                fieldnames = list(loss_history[0].keys())
+                with open(loss_csv_path, 'w', newline='') as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(loss_history)
+                print(f"Loss breakdown saved to: {loss_csv_path}")
+                logging.info(f"Loss history exported to {loss_csv_path}")
 
 if __name__ == "__main__":
     main()

@@ -65,6 +65,13 @@ def get_parser():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1, 
                         help="Number of updates steps to accumulate before performing a backward/update pass.",)
     parser.add_argument("--log_interval", type=int, default=100, help="The log interval of training.")
+    ## Inference during training
+    parser.add_argument("--inference_during_training", action="store_true", 
+                        help="Whether to perform inference on dataset samples during training at checkpoint intervals.")
+    parser.add_argument("--num_inference_samples", type=int, default=3,
+                        help="Number of random samples to infer per checkpoint.")
+    parser.add_argument("--inference_seed", type=int, default=42,
+                        help="Random seed for selecting inference samples.")
     ## learning rate
     parser.add_argument("--learning_rate", type=float, default=1e-4, 
                         help="Initial learning rate (after the potential warmup period) to use.")
