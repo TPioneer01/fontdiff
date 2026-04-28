@@ -29,7 +29,10 @@ class FontDiffuserModel(ModelMixin, ConfigMixin):
         nn.init.zeros_(self.edge_adapter_content.bias)
         nn.init.zeros_(self.edge_adapter_style.weight)
         nn.init.zeros_(self.edge_adapter_style.bias)
-        self.edge_fusion_scale = nn.Parameter(torch.tensor(edge_fusion_scale))
+        
+        # Safely set edge_fusion_scale as nn.Parameter, avoiding conflicts with @register_to_config
+        if not hasattr(self, 'edge_fusion_scale') or not isinstance(getattr(self, 'edge_fusion_scale', None), nn.Parameter):
+            self.edge_fusion_scale = nn.Parameter(torch.tensor(edge_fusion_scale, dtype=torch.float32))
 
     def _inject_edge(self, image, edge_map, adapter):
         if edge_map is None:
@@ -100,7 +103,10 @@ class FontDiffuserModelDPM(ModelMixin, ConfigMixin):
         nn.init.zeros_(self.edge_adapter_content.bias)
         nn.init.zeros_(self.edge_adapter_style.weight)
         nn.init.zeros_(self.edge_adapter_style.bias)
-        self.edge_fusion_scale = nn.Parameter(torch.tensor(edge_fusion_scale))
+        
+        # Safely set edge_fusion_scale as nn.Parameter, avoiding conflicts with @register_to_config
+        if not hasattr(self, 'edge_fusion_scale') or not isinstance(getattr(self, 'edge_fusion_scale', None), nn.Parameter):
+            self.edge_fusion_scale = nn.Parameter(torch.tensor(edge_fusion_scale, dtype=torch.float32))
 
     def _inject_edge(self, image, edge_map, adapter):
         if edge_map is None:

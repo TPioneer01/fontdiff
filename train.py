@@ -94,14 +94,25 @@ def main():
     if args.phase_2:
         edge_adapter_path = f"{args.phase_1_ckpt_dir}/edge_adapter.pth"
         if os.path.exists(edge_adapter_path):
-            edge_state = torch.load(edge_adapter_path, map_location="cpu")
-            if "content_adapter" in edge_state and "style_adapter" in edge_state and "fusion_scale" in edge_state:
-                model.edge_adapter_content.load_state_dict(edge_state["content_adapter"])
-                model.edge_adapter_style.load_state_dict(edge_state["style_adapter"])
-                model.edge_fusion_scale.data.copy_(edge_state["fusion_scale"])
-            else:
-                model.load_state_dict(edge_state, strict=False)
-            print("Loaded edge adapter from phase-1 checkpoint.")
+            try:
+                edge_state = torch.load(edge_adapter_path, map_location="cpu")
+                if "content_adapter" in edge_state and "style_adapter" in edge_state and "fusion_scale" in edge_state:
+                    model.edge_adapter_content.load_state_dict(edge_state["content_adapter"])
+                    model.edge_adapter_style.load_state_dict(edge_state["style_adapter"])
+                    # Safely update edge_fusion_scale using state_dict
+                    try:
+                        full_state = model.state_dict()
+                        full_state['edge_fusion_scale'] = edge_state["fusion_scale"]
+                        model.load_state_dict(full_state, strict=False)
+                    except Exception as e:
+                        print(f"[Warning] Could not update edge_fusion_scale: {e}")
+                else:
+                    model.load_state_dict(edge_state, strict=False)
+                print("Loaded edge adapter from phase-1 checkpoint.")
+            except Exception as e:
+                print(f"[Warning] Failed to load edge adapter: {e}")
+                import traceback
+                traceback.print_exc()
 
     # Build content perceptaual Loss
     perceptual_loss = ContentPerceptualLoss()
@@ -176,17 +187,23 @@ def main():
     inference_pipe = None
     if args.inference_during_training and accelerator.is_main_process:
         try:
+            # Initialize inference components
             unet_temp = build_unet(args=args)
             style_encoder_temp = build_style_encoder(args=args)
             content_encoder_temp = build_content_encoder(args=args)
+            
+            # Create DPM model (will be updated with trained weights later)
             model_dpm = FontDiffuserModelDPM(
                 unet=unet_temp,
                 style_encoder=style_encoder_temp,
                 content_encoder=content_encoder_temp,
                 edge_fusion_scale=args.edge_fusion_scale
             )
-            # Load trained weights into DPM model (will be updated after each checkpoint)
+            
+            # Load DDPM scheduler
             noise_scheduler_infer = build_ddpm_scheduler(args)
+            
+            # Create inference pipeline
             inference_pipe = FontDiffuserDPMPipeline(
                 model=model_dpm,
                 ddpm_train_scheduler=noise_scheduler_infer,
@@ -197,6 +214,9 @@ def main():
             print("[Inference Pipeline] Initialized for training-time monitoring")
         except Exception as e:
             print(f"[Warning] Failed to initialize inference pipeline: {e}")
+            import traceback
+            traceback.print_exc()
+            inference_pipe = None
             args.inference_during_training = False
 
     # Only show the progress bar once on each machine.
@@ -342,12 +362,21 @@ def main():
                                 print(f"[Checkpoint {global_step}] Performing inference on dataset samples...")
                                 
                                 # Update inference pipeline with current model weights
+                                # Load model components
                                 inference_pipe.model.unet.load_state_dict(model.unet.state_dict())
                                 inference_pipe.model.style_encoder.load_state_dict(model.style_encoder.state_dict())
                                 inference_pipe.model.content_encoder.load_state_dict(model.content_encoder.state_dict())
                                 inference_pipe.model.edge_adapter_content.load_state_dict(model.edge_adapter_content.state_dict())
                                 inference_pipe.model.edge_adapter_style.load_state_dict(model.edge_adapter_style.state_dict())
-                                inference_pipe.model.edge_fusion_scale.data.copy_(model.edge_fusion_scale.detach())
+                                
+                                # Safely update edge_fusion_scale using state_dict
+                                try:
+                                    state = inference_pipe.model.state_dict()
+                                    state['edge_fusion_scale'] = model.edge_fusion_scale.detach().cpu()
+                                    inference_pipe.model.load_state_dict(state, strict=False)
+                                except Exception as e:
+                                    print(f"[Warning] Could not update edge_fusion_scale: {e}")
+                                
                                 inference_pipe.model.to(accelerator.device)
                                 
                                 # Run inference

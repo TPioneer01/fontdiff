@@ -165,14 +165,25 @@ def load_fontdiffuer_pipeline(args):
         edge_fusion_scale=args.edge_fusion_scale)
     edge_adapter_path = f"{args.ckpt_dir}/edge_adapter.pth"
     if os.path.exists(edge_adapter_path):
-        edge_state = torch.load(edge_adapter_path, map_location=device)
-        if "content_adapter" in edge_state and "style_adapter" in edge_state and "fusion_scale" in edge_state:
-            model.edge_adapter_content.load_state_dict(edge_state["content_adapter"])
-            model.edge_adapter_style.load_state_dict(edge_state["style_adapter"])
-            model.edge_fusion_scale.data.copy_(edge_state["fusion_scale"].to(device))
-        else:
-            model.load_state_dict(edge_state, strict=False)
-        print("Loaded edge adapter state_dict successfully!")
+        try:
+            edge_state = torch.load(edge_adapter_path, map_location=device)
+            if "content_adapter" in edge_state and "style_adapter" in edge_state and "fusion_scale" in edge_state:
+                model.edge_adapter_content.load_state_dict(edge_state["content_adapter"])
+                model.edge_adapter_style.load_state_dict(edge_state["style_adapter"])
+                # Safely update edge_fusion_scale using state_dict
+                try:
+                    full_state = model.state_dict()
+                    full_state['edge_fusion_scale'] = edge_state["fusion_scale"].to(device)
+                    model.load_state_dict(full_state, strict=False)
+                except Exception as e:
+                    print(f"[Warning] Could not update edge_fusion_scale: {e}")
+            else:
+                model.load_state_dict(edge_state, strict=False)
+            print("Loaded edge adapter state_dict successfully!")
+        except Exception as e:
+            print(f"[Warning] Failed to load edge adapter: {e}")
+            import traceback
+            traceback.print_exc()
 
     model.to(device)
     print(f"Loaded the model state_dict successfully on {device}!")
