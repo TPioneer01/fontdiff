@@ -30,6 +30,10 @@ def get_parser():
                         help="The channels of the fisrt layer output of content encoder.",)
     parser.add_argument("--style_start_channel", type=int, default=64, 
                         help="The channels of the fisrt layer output of content encoder.",)
+    parser.add_argument("--use_edge_condition", type=bool, default=True,
+                        help="Enable edge-map conditioning for content/style branches.")
+    parser.add_argument("--edge_fusion_scale", type=float, default=0.25,
+                        help="Initial scale for injecting edge cues into encoder inputs.")
     
     # Training
     parser.add_argument("--phase_2", action="store_true", help="Training in phase 2 using SCR module.")
@@ -48,6 +52,12 @@ def get_parser():
     ## loss coefficient
     parser.add_argument("--perceptual_coefficient", type=float, default=0.01)
     parser.add_argument("--offset_coefficient", type=float, default=0.5)
+    parser.add_argument("--edge_coefficient", type=float, default=0.1,
+                        help="Weight of edge-consistency loss.")
+    parser.add_argument("--edge_canny_low", type=int, default=80,
+                        help="Lower threshold for Canny edge extraction.")
+    parser.add_argument("--edge_canny_high", type=int, default=180,
+                        help="Upper threshold for Canny edge extraction.")
     ## step
     parser.add_argument("--max_train_steps", type=int, default=440000, 
                         help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",)

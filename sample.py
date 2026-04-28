@@ -82,30 +82,39 @@ def arg_parse():
 
 
 def image_process(args, content_image=None, style_image=None):
+    raw_content_image = None
+    raw_style_image = None
+
     if not args.demo:
         # Read content image and style image
         if args.character_input:
             assert args.content_character is not None, "The content_character should not be None."
             if not is_char_in_font(font_path=args.ttf_path, char=args.content_character):
-                return None, None
+                return None, None, None, None, None
             font = load_ttf(ttf_path=args.ttf_path)
             content_image = ttf2im(font=font, char=args.content_character)
             content_image_pil = content_image.copy()
+            raw_content_image = content_image.copy()
         else:
             content_image = Image.open(args.content_image_path).convert('RGB')
             content_image_pil = None
+            raw_content_image = content_image.copy()
         style_image = Image.open(args.style_image_path).convert('RGB')
+        raw_style_image = style_image.copy()
     else:
         assert style_image is not None, "The style image should not be None."
         if args.character_input:
             assert args.content_character is not None, "The content_character should not be None."
             if not is_char_in_font(font_path=args.ttf_path, char=args.content_character):
-                return None, None
+                return None, None, None, None, None
             font = load_ttf(ttf_path=args.ttf_path)
             content_image = ttf2im(font=font, char=args.content_character)
+            raw_content_image = content_image.copy()
         else:
             assert content_image is not None, "The content image should not be None."
+            raw_content_image = content_image.copy()
         content_image_pil = None
+        raw_style_image = style_image.copy()
         
     ## Dataset transform
     content_inference_transforms = transforms.Compose(
@@ -121,7 +130,23 @@ def image_process(args, content_image=None, style_image=None):
     content_image = content_inference_transforms(content_image)[None, :]
     style_image = style_inference_transforms(style_image)[None, :]
 
-    return content_image, style_image, content_image_pil
+    # Edge maps are extracted online from existing images for condition injection.
+    content_edge_np = cv2.Canny(
+        np.array(raw_content_image.convert("L")),
+        threshold1=args.edge_canny_low,
+        threshold2=args.edge_canny_high,
+    )
+    style_edge_np = cv2.Canny(
+        np.array(raw_style_image.convert("L")),
+        threshold1=args.edge_canny_low,
+        threshold2=args.edge_canny_high,
+    )
+    content_edge = torch.from_numpy(content_edge_np).float().unsqueeze(0).unsqueeze(0) / 255.0
+    style_edge = torch.from_numpy(style_edge_np).float().unsqueeze(0).unsqueeze(0) / 255.0
+    content_edge = torch.nn.functional.interpolate(content_edge, size=args.content_image_size, mode="nearest")
+    style_edge = torch.nn.functional.interpolate(style_edge, size=args.style_image_size, mode="nearest")
+
+    return content_image, style_image, content_edge, style_edge, content_image_pil
 
 def load_fontdiffuer_pipeline(args):
     device = torch.device(args.device)
@@ -136,7 +161,19 @@ def load_fontdiffuer_pipeline(args):
     model = FontDiffuserModelDPM(
         unet=unet,
         style_encoder=style_encoder,
-        content_encoder=content_encoder)
+        content_encoder=content_encoder,
+        edge_fusion_scale=args.edge_fusion_scale)
+    edge_adapter_path = f"{args.ckpt_dir}/edge_adapter.pth"
+    if os.path.exists(edge_adapter_path):
+        edge_state = torch.load(edge_adapter_path, map_location=device)
+        if "content_adapter" in edge_state and "style_adapter" in edge_state and "fusion_scale" in edge_state:
+            model.edge_adapter_content.load_state_dict(edge_state["content_adapter"])
+            model.edge_adapter_style.load_state_dict(edge_state["style_adapter"])
+            model.edge_fusion_scale.data.copy_(edge_state["fusion_scale"].to(device))
+        else:
+            model.load_state_dict(edge_state, strict=False)
+        print("Loaded edge adapter state_dict successfully!")
+
     model.to(device)
     print(f"Loaded the model state_dict successfully on {device}!")
 
@@ -166,9 +203,9 @@ def sampling(args, pipe, content_image=None, style_image=None):
     if args.seed:
         set_seed(seed=args.seed)
     
-    content_image, style_image, content_image_pil = image_process(args=args, 
-                                                                  content_image=content_image, 
-                                                                  style_image=style_image)
+    content_image, style_image, content_edge, style_edge, content_image_pil = image_process(args=args, 
+                                                                                              content_image=content_image, 
+                                                                                              style_image=style_image)
     if content_image == None:
         print(f"The content_character you provided is not in the ttf. \
                 Please change the content_character or you can change the ttf.")
@@ -177,11 +214,15 @@ def sampling(args, pipe, content_image=None, style_image=None):
     with torch.no_grad():
         content_image = content_image.to(args.device)
         style_image = style_image.to(args.device)
+        content_edge = content_edge.to(args.device)
+        style_edge = style_edge.to(args.device)
         print(f"Sampling by DPM-Solver++ ......")
         start = time.time()
         images = pipe.generate(
             content_images=content_image,
             style_images=style_image,
+            content_edges=content_edge,
+            style_edges=style_edge,
             batch_size=1,
             order=args.order,
             num_inference_step=args.num_inference_steps,

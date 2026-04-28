@@ -43,6 +43,8 @@ class FontDiffuserDPMPipeline():
         self,
         content_images,
         style_images,
+        content_edges,
+        style_edges,
         batch_size,
         order,
         num_inference_step,
@@ -63,12 +65,18 @@ class FontDiffuserDPMPipeline():
         cond = []
         cond.append(content_images)
         cond.append(style_images)
+        cond.append(content_edges)
+        cond.append(style_edges)
 
         uncond = []
         uncond_content_images = torch.ones_like(content_images).to(self.model.device)
         uncond_style_images = torch.ones_like(style_images).to(self.model.device)
+        uncond_content_edges = torch.zeros_like(content_edges).to(self.model.device)
+        uncond_style_edges = torch.zeros_like(style_edges).to(self.model.device)
         uncond.append(uncond_content_images)
         uncond.append(uncond_style_images)
+        uncond.append(uncond_content_edges)
+        uncond.append(uncond_style_edges)
 
         # 2.Convert the discrete-time model to the continuous-time
         model_fn = model_wrapper(

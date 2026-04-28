@@ -1,6 +1,7 @@
 from .model import (FontDiffuserModel,
                    FontDiffuserModelDPM)
-from .criterion import ContentPerceptualLoss
+from .criterion import (ContentPerceptualLoss,
+                        EdgeConsistencyLoss)
 from .dpm_solver.pipeline_dpm_solver import FontDiffuserDPMPipeline
 from .modules import (ContentEncoder,
                      StyleEncoder, 

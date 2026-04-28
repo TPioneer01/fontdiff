@@ -17,11 +17,26 @@ class FontDiffuserModel(ModelMixin, ConfigMixin):
         unet, 
         style_encoder,
         content_encoder,
+        edge_fusion_scale=0.25,
     ):
         super().__init__()
         self.unet = unet
         self.style_encoder = style_encoder
         self.content_encoder = content_encoder
+        self.edge_adapter_content = nn.Conv2d(1, 3, kernel_size=3, padding=1)
+        self.edge_adapter_style = nn.Conv2d(1, 3, kernel_size=3, padding=1)
+        nn.init.zeros_(self.edge_adapter_content.weight)
+        nn.init.zeros_(self.edge_adapter_content.bias)
+        nn.init.zeros_(self.edge_adapter_style.weight)
+        nn.init.zeros_(self.edge_adapter_style.bias)
+        self.edge_fusion_scale = nn.Parameter(torch.tensor(edge_fusion_scale))
+
+    def _inject_edge(self, image, edge_map, adapter):
+        if edge_map is None:
+            return image
+        edge_residual = torch.tanh(adapter(edge_map))
+        fused = image + self.edge_fusion_scale * edge_residual
+        return fused.clamp(-1.0, 1.0)
     
     def forward(
         self, 
@@ -30,7 +45,12 @@ class FontDiffuserModel(ModelMixin, ConfigMixin):
         style_images,
         content_images,
         content_encoder_downsample_size,
+        content_edges=None,
+        style_edges=None,
     ):
+        content_images = self._inject_edge(content_images, content_edges, self.edge_adapter_content)
+        style_images = self._inject_edge(style_images, style_edges, self.edge_adapter_style)
+
         style_img_feature, _, _ = self.style_encoder(style_images)
     
         batch_size, channel, height, width = style_img_feature.shape
@@ -68,11 +88,26 @@ class FontDiffuserModelDPM(ModelMixin, ConfigMixin):
         unet, 
         style_encoder,
         content_encoder,
+        edge_fusion_scale=0.25,
     ):
         super().__init__()
         self.unet = unet
         self.style_encoder = style_encoder
         self.content_encoder = content_encoder
+        self.edge_adapter_content = nn.Conv2d(1, 3, kernel_size=3, padding=1)
+        self.edge_adapter_style = nn.Conv2d(1, 3, kernel_size=3, padding=1)
+        nn.init.zeros_(self.edge_adapter_content.weight)
+        nn.init.zeros_(self.edge_adapter_content.bias)
+        nn.init.zeros_(self.edge_adapter_style.weight)
+        nn.init.zeros_(self.edge_adapter_style.bias)
+        self.edge_fusion_scale = nn.Parameter(torch.tensor(edge_fusion_scale))
+
+    def _inject_edge(self, image, edge_map, adapter):
+        if edge_map is None:
+            return image
+        edge_residual = torch.tanh(adapter(edge_map))
+        fused = image + self.edge_fusion_scale * edge_residual
+        return fused.clamp(-1.0, 1.0)
     
     def forward(
         self, 
@@ -84,6 +119,11 @@ class FontDiffuserModelDPM(ModelMixin, ConfigMixin):
     ):
         content_images = cond[0]
         style_images = cond[1]
+        content_edges = cond[2] if len(cond) > 2 else None
+        style_edges = cond[3] if len(cond) > 3 else None
+
+        content_images = self._inject_edge(content_images, content_edges, self.edge_adapter_content)
+        style_images = self._inject_edge(style_images, style_edges, self.edge_adapter_style)
 
         style_img_feature, _, style_residual_features = self.style_encoder(style_images)
         

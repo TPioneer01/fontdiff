@@ -1,5 +1,7 @@
 import os
 import random
+import cv2
+import numpy as np
 from PIL import Image
 
 import torch
@@ -12,6 +14,14 @@ def get_nonorm_transform(resolution):
                                interpolation=transforms.InterpolationMode.BILINEAR), 
              transforms.ToTensor()])
     return nonorm_transform
+
+
+def get_edge_tensor(image, out_size, canny_low, canny_high):
+    gray = np.array(image.convert("L"))
+    edge = cv2.Canny(gray, threshold1=canny_low, threshold2=canny_high)
+    edge = cv2.resize(edge, (out_size[1], out_size[0]), interpolation=cv2.INTER_NEAREST)
+    edge = torch.from_numpy(edge).float() / 255.0
+    return edge.unsqueeze(0)
 
 
 class FontDataset(Dataset):
@@ -29,6 +39,11 @@ class FontDataset(Dataset):
         self.get_path()
         self.transforms = transforms
         self.nonorm_transforms = get_nonorm_transform(args.resolution)
+        self.content_size = args.content_image_size
+        self.style_size = args.style_image_size
+        self.target_size = (args.resolution, args.resolution)
+        self.edge_canny_low = args.edge_canny_low
+        self.edge_canny_high = args.edge_canny_high
 
     def get_path(self):
         self.target_images = []
@@ -62,6 +77,11 @@ class FontDataset(Dataset):
         target_image = Image.open(target_image_path).convert("RGB")
         nonorm_target_image = self.nonorm_transforms(target_image)
 
+        # Extract edge maps from the original images to avoid extra annotation cost.
+        content_edge = get_edge_tensor(content_image, self.content_size, self.edge_canny_low, self.edge_canny_high)
+        style_edge = get_edge_tensor(style_image, self.style_size, self.edge_canny_low, self.edge_canny_high)
+        target_edge = get_edge_tensor(target_image, self.target_size, self.edge_canny_low, self.edge_canny_high)
+
         if self.transforms is not None:
             content_image = self.transforms[0](content_image)
             style_image = self.transforms[1](style_image)
@@ -69,8 +89,11 @@ class FontDataset(Dataset):
         
         sample = {
             "content_image": content_image,
+            "content_edge": content_edge,
             "style_image": style_image,
+            "style_edge": style_edge,
             "target_image": target_image,
+            "target_edge": target_edge,
             "target_image_path": target_image_path,
             "nonorm_target_image": nonorm_target_image}
         
