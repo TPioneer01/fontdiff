@@ -118,10 +118,10 @@ if __name__ == '__main__':
             reference_image = gr.Image(width=320, label='Reference Image', image_mode='RGB', type='pil')
 
         source_characters = gr.Textbox(
-            value='隆\n轉\n識',
+            value='中\n国\n矿\n业\n大\n学\n',
             lines=6,
             label='Source Characters',
-            placeholder='每行一个字符，也支持用英文逗号分隔，例如: 隆,轉,識',
+            placeholder='每行一个字符，也支持用英文逗号分隔，例如: 中,国,矿,业,大,学',
         )
 
         with gr.Row():

@@ -26,16 +26,24 @@ def save_single_image(save_dir, image):
 
 
 def save_image_with_content_style(save_dir, image, content_image_pil, content_image_path, style_image_pil, style_image_path, resolution):
-    
+    def _as_rgb_resized(img):
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        if img.size != (resolution, resolution):
+            img = img.resize((resolution, resolution), Image.BILINEAR)
+        return img
+
     new_image = Image.new('RGB', (resolution*3, resolution))
     if content_image_pil is not None:
-        content_image = content_image_pil
+        content_image = _as_rgb_resized(content_image_pil)
     else:
-        content_image = Image.open(content_image_path).convert("RGB").resize((resolution, resolution), Image.BILINEAR)
+        content_image = _as_rgb_resized(Image.open(content_image_path))
     if style_image_pil is not None:
-        style_image = style_image_pil
+        style_image = _as_rgb_resized(style_image_pil)
     else:
-        style_image = Image.open(style_image_path).convert("RGB").resize((resolution, resolution), Image.BILINEAR)
+        style_image = _as_rgb_resized(Image.open(style_image_path))
+
+    image = _as_rgb_resized(image)
 
     new_image.paste(content_image, (0, 0))
     new_image.paste(style_image, (resolution, 0))
