@@ -84,6 +84,7 @@ def arg_parse():
 def image_process(args, content_image=None, style_image=None):
     raw_content_image = None
     raw_style_image = None
+    content_image_pil = None
 
     if not args.demo:
         # Read content image and style image
@@ -109,11 +110,11 @@ def image_process(args, content_image=None, style_image=None):
                 return None, None, None, None, None
             font = load_ttf(ttf_path=args.ttf_path)
             content_image = ttf2im(font=font, char=args.content_character)
+            content_image_pil = content_image.copy()
             raw_content_image = content_image.copy()
         else:
             assert content_image is not None, "The content image should not be None."
             raw_content_image = content_image.copy()
-        content_image_pil = None
         raw_style_image = style_image.copy()
         
     ## Dataset transform
@@ -146,7 +147,9 @@ def image_process(args, content_image=None, style_image=None):
     content_edge = torch.nn.functional.interpolate(content_edge, size=args.content_image_size, mode="nearest")
     style_edge = torch.nn.functional.interpolate(style_edge, size=args.style_image_size, mode="nearest")
 
-    return content_image, style_image, content_edge, style_edge, content_image_pil
+    style_image_pil = raw_style_image.copy()
+
+    return content_image, style_image, content_edge, style_edge, content_image_pil, style_image_pil
 
 def load_fontdiffuer_pipeline(args):
     device = torch.device(args.device)
@@ -212,10 +215,10 @@ def sampling(args, pipe, content_image=None, style_image=None):
     if args.seed:
         set_seed(seed=args.seed)
     
-    content_image, style_image, content_edge, style_edge, content_image_pil = image_process(args=args, 
-                                                                                              content_image=content_image, 
-                                                                                              style_image=style_image)
-    if content_image == None:
+    content_image, style_image, content_edge, style_edge, content_image_pil, style_image_pil = image_process(args=args, 
+                                                                                                            content_image=content_image, 
+                                                                                                            style_image=style_image)
+    if content_image is None:
         print(f"The content_character you provided is not in the ttf. \
                 Please change the content_character or you can change the ttf.")
         return None
@@ -253,6 +256,7 @@ def sampling(args, pipe, content_image=None, style_image=None):
                                             image=images[0],
                                             content_image_pil=content_image_pil,
                                             content_image_path=None,
+                                            style_image_pil=style_image_pil,
                                             style_image_path=args.style_image_path,
                                             resolution=args.resolution)
             else:
@@ -260,6 +264,7 @@ def sampling(args, pipe, content_image=None, style_image=None):
                                             image=images[0],
                                             content_image_pil=None,
                                             content_image_path=args.content_image_path,
+                                            style_image_pil=style_image_pil,
                                             style_image_path=args.style_image_path,
                                             resolution=args.resolution)
             print(f"Finish the sampling process, costing time {end - start}s")

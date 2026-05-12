@@ -1,17 +1,41 @@
+import os
 import random
+from datetime import datetime
+
 import gradio as gr
-from sample import (arg_parse, 
-                    sampling,
-                    load_fontdiffuer_pipeline,
-                    resolve_runtime_device)
+
+from sample import (
+    arg_parse,
+    sampling,
+    load_fontdiffuer_pipeline,
+    resolve_runtime_device,
+)
 
 
-def run_fontdiffuer(source_image, 
-                    character, 
+def _parse_source_characters(source_characters):
+    if source_characters is None:
+        return []
+
+    characters = []
+    for line in str(source_characters).replace("，", ",").splitlines():
+        for character in line.split(","):
+            character = character.strip()
+            if character:
+                characters.append(character)
+    return characters
+
+
+def _safe_dirname(text):
+    cleaned = "".join(character if character.isalnum() else "_" for character in str(text))
+    cleaned = cleaned.strip("_")
+    return cleaned or "char"
+
+
+def run_fontdiffuer(source_image,
+                    source_characters,
                     reference_image,
                     sampling_step,
                     guidance_scale,
-                    batch_size,
                     device_mode):
     global pipe
 
@@ -20,19 +44,59 @@ def run_fontdiffuer(source_image,
         args.device = resolved_device
         pipe = load_fontdiffuer_pipeline(args=args)
 
-    args.character_input = False if source_image is not None else True
-    args.content_character = character
     args.num_inference_steps = int(sampling_step)
     args.guidance_scale = guidance_scale
-    args.batch_size = batch_size
-    args.seed = random.randint(0, 10000)
-    out_image = sampling(
-        args=args,
-        pipe=pipe,
-        content_image=source_image,
-        style_image=reference_image)
-    status = f"{device_message} Current runtime device: {args.device}."
-    return out_image, status
+    args.save_image = True
+
+    run_root = os.path.join("outputs", "gradio_runs", datetime.now().strftime("%Y%m%d_%H%M%S"))
+    os.makedirs(run_root, exist_ok=True)
+
+    if source_image is not None:
+        args.character_input = False
+        args.content_character = None
+        args.save_image_dir = os.path.join(run_root, "source_image")
+        os.makedirs(args.save_image_dir, exist_ok=True)
+        args.seed = random.randint(0, 10000)
+        generated_image = sampling(
+            args=args,
+            pipe=pipe,
+            content_image=source_image,
+            style_image=reference_image,
+        )
+        status_lines = [
+            f"{device_message} Current runtime device: {args.device}.",
+            f"Saved 1 result to {args.save_image_dir}.",
+        ]
+        return [(generated_image, "source_image")], "\n".join(status_lines), args.save_image_dir
+
+    source_characters_list = _parse_source_characters(source_characters)
+    if not source_characters_list:
+        return [], f"{device_message} Current runtime device: {args.device}.\nPlease provide at least one source character.", run_root
+
+    results = []
+    status_lines = [f"{device_message} Current runtime device: {args.device}."]
+
+    for index, character in enumerate(source_characters_list, start=1):
+        args.character_input = True
+        args.content_character = character
+        args.save_image_dir = os.path.join(run_root, f"{index:02d}_{_safe_dirname(character)}")
+        os.makedirs(args.save_image_dir, exist_ok=True)
+        args.seed = random.randint(0, 10000)
+
+        generated_image = sampling(
+            args=args,
+            pipe=pipe,
+            content_image=None,
+            style_image=reference_image,
+        )
+        if generated_image is not None:
+            results.append((generated_image, character))
+            status_lines.append(f"{index:02d}. {character} -> {args.save_image_dir}")
+        else:
+            status_lines.append(f"{index:02d}. {character} -> skipped (character not in font).")
+
+    status_lines.append(f"Saved {len(results)} result(s) under {run_root}.")
+    return results, "\n".join(status_lines), run_root
 
 
 if __name__ == '__main__':
@@ -46,131 +110,44 @@ if __name__ == '__main__':
     device_status_default = f"{args.device_message} Current runtime device: {args.device}."
 
     with gr.Blocks() as demo:
-        with gr.Row():
-            with gr.Column(scale=1):
-                gr.HTML("""
-                    <div style="text-align: center; max-width: 1200px; margin: 20px auto;">
-                    <h1 style="font-weight: 900; font-size: 3rem; margin: 0rem">
-                        FontDiffuser
-                    </h1>
-                    <h2 style="font-weight: 450; font-size: 1rem; margin: 0rem">
-                        <a href="https://yeungchenwa.github.io/"">Zhenhua Yang</a>, 
-                        <a href="https://scholar.google.com/citations?user=6zNgcjAAAAAJ&hl=zh-CN&oi=ao"">Dezhi Peng</a>, 
-                        <a href="https://github.com/kyxscut"">Yuxin Kong</a>, 
-                        <a href="https://github.com/ZZXF11"">Yuyi Zhang</a>, 
-                        <a href="https://scholar.google.com/citations?user=IpmnLFcAAAAJ&hl=zh-CN&oi=ao"">Cong Yao</a>, 
-                        <a href="http://www.dlvc-lab.net/lianwen/Index.html"">Lianwen Jin</a>†
-                    </h2>
-                    <h2 style="font-weight: 450; font-size: 1rem; margin: 0rem">
-                        <strong>South China University of Technology</strong>, Alibaba DAMO Academy
-                    </h2>
-                    <h3 style="font-weight: 450; font-size: 1rem; margin: 0rem"> 
-                    [<a href="https://arxiv.org/abs/2312.12142" style="color:blue;">arXiv</a>] 
-                    [<a href="https://yeungchenwa.github.io/fontdiffuser-homepage/" style="color:green;">Homepage</a>]
-                    [<a href="https://github.com/yeungchenwa/FontDiffuser" style="color:green;">Github</a>]
-                    </h3>
-                    <h2 style="text-align: left; font-weight: 600; font-size: 1rem; margin-top: 0.5rem; margin-bottom: 0.5rem">
-                    1.We propose FontDiffuser, which is capable to generate unseen characters and styles, and it can be extended to the cross-lingual generation, such as Chinese to Korean.
-                    </h2>
-                    <h2 style="text-align: left; font-weight: 600; font-size: 1rem; margin-top: 0.5rem; margin-bottom: 0.5rem">
-                    2. FontDiffuser excels in generating complex character and handling large style variation. And it achieves state-of-the-art performance.
-                    </h2>
-                    </div>
-                    """)
-                gr.Image('figures/result_vis.png')
-                gr.Image('figures/demo_tips.png')
-            with gr.Column(scale=1):
-                with gr.Row():
-                    source_image = gr.Image(width=320, label='[Option 1] Source Image', image_mode='RGB', type='pil')
-                    reference_image = gr.Image(width=320, label='Reference Image', image_mode='RGB', type='pil')
-                with gr.Row():
-                    character = gr.Textbox(value='隆', label='[Option 2] Source Character')
-                with gr.Row():
-                    fontdiffuer_output_image = gr.Image(height=200, label="FontDiffuser Output Image", image_mode='RGB', type='pil')
-                with gr.Row():
-                    device_mode = gr.Dropdown(
-                        choices=["auto", "cpu", "cuda:0"],
-                        value=args.device,
-                        label="Runtime Device",
-                        info="Choose auto/cpu/cuda:0. If CUDA is unavailable, selecting cuda:0 falls back to CPU."
-                    )
-                with gr.Row():
-                    runtime_status = gr.Textbox(
-                        value=device_status_default,
-                        label="Runtime Status",
-                        interactive=False
-                    )
+        gr.Markdown("# FontDiffuser")
+        gr.Markdown("输入一个参考图或一组 Source Character，点击运行后会逐个推理并把结果保存到本地目录。")
 
-                sampling_step = gr.Slider(20, 50, value=20, step=10, 
-                                          label="Sampling Step", info="The sampling step by FontDiffuser.")
-                guidance_scale = gr.Slider(1, 12, value=7.5, step=0.5, 
-                                           label="Scale of Classifier-free Guidance", 
-                                           info="The scale used for classifier-free guidance sampling")
-                batch_size = gr.Slider(1, 4, value=1, step=1, 
-                                       label="Batch Size", info="The number of images to be sampled.")
+        with gr.Row():
+            source_image = gr.Image(width=320, label='Source Image (optional)', image_mode='RGB', type='pil')
+            reference_image = gr.Image(width=320, label='Reference Image', image_mode='RGB', type='pil')
 
-                FontDiffuser = gr.Button('Run FontDiffuser')
-                gr.Markdown("## <font color=#008000, size=6>Examples that You Can Choose Below⬇️</font>")
+        source_characters = gr.Textbox(
+            value='隆\n轉\n識',
+            lines=6,
+            label='Source Characters',
+            placeholder='每行一个字符，也支持用英文逗号分隔，例如: 隆,轉,識',
+        )
+
         with gr.Row():
-            gr.Markdown("## Examples")
-        with gr.Row():
-            with gr.Column(scale=1):
-                gr.Markdown("## Example 1️⃣: Source Image and Reference Image")
-                gr.Markdown("### In this mode, we provide both the source image and \
-                            the reference image for you to try our demo!")
-                gr.Examples(
-                    examples=[['figures/source_imgs/source_灨.jpg', 'figures/ref_imgs/ref_籍.jpg'], 
-                            ['figures/source_imgs/source_鑻.jpg', 'figures/ref_imgs/ref_鹰.jpg'],
-                            ['figures/source_imgs/source_鑫.jpg', 'figures/ref_imgs/ref_壤.jpg'],
-                            ['figures/source_imgs/source_釅.jpg', 'figures/ref_imgs/ref_雕.jpg']],
-                    inputs=[source_image, reference_image]
-                )
-            with gr.Column(scale=1):
-                gr.Markdown("## Example 2️⃣: Character and Reference Image")
-                gr.Markdown("### In this mode, we provide the content character and the reference image \
-                            for you to try our demo!")
-                gr.Examples(
-                    examples=[['龍', 'figures/ref_imgs/ref_鷢.jpg'],
-                            ['轉', 'figures/ref_imgs/ref_鲸.jpg'],
-                            ['懭', 'figures/ref_imgs/ref_籍_1.jpg'],
-                            ['識', 'figures/ref_imgs/ref_鞣.jpg']],
-                    inputs=[character, reference_image]
-                )
-            with gr.Column(scale=1):
-                gr.Markdown("## Example 3️⃣: Reference Image")
-                gr.Markdown("### In this mode, we provide only the reference image, \
-                            you can upload your own source image or you choose the character above \
-                            to try our demo!")
-                gr.Examples(
-                    examples=['figures/ref_imgs/ref_闡.jpg', 
-                            'figures/ref_imgs/ref_雕.jpg',
-                            'figures/ref_imgs/ref_豄.jpg',
-                            'figures/ref_imgs/ref_馨.jpg',
-                            'figures/ref_imgs/ref_鲸.jpg',
-                            'figures/ref_imgs/ref_檀.jpg',
-                            'figures/ref_imgs/ref_鞣.jpg',
-                            'figures/ref_imgs/ref_穗.jpg',
-                            'figures/ref_imgs/ref_欟.jpg',
-                            'figures/ref_imgs/ref_籍_1.jpg',
-                            'figures/ref_imgs/ref_鷢.jpg',
-                            'figures/ref_imgs/ref_媚.jpg',
-                            'figures/ref_imgs/ref_籍.jpg',
-                            'figures/ref_imgs/ref_壤.jpg',
-                            'figures/ref_imgs/ref_蜓.jpg',
-                            'figures/ref_imgs/ref_鹰.jpg'],
-                    examples_per_page=20,
-                    inputs=reference_image
-                )
-        FontDiffuser.click(
+            device_mode = gr.Dropdown(
+                choices=["auto", "cpu", "cuda:0"],
+                value=args.device,
+                label="Runtime Device",
+            )
+            sampling_step = gr.Slider(20, 50, value=20, step=10, label="Sampling Step")
+            guidance_scale = gr.Slider(1, 12, value=7.5, step=0.5, label="Guidance Scale")
+
+        run_button = gr.Button('Run FontDiffuser')
+
+        output_gallery = gr.Gallery(label='Generated Results', columns=2, height=360)
+        runtime_status = gr.Textbox(value=device_status_default, label='Runtime Status', interactive=False, lines=4)
+        save_dir_text = gr.Textbox(value='', label='Saved Directory', interactive=False)
+
+        run_button.click(
             fn=run_fontdiffuer,
-            inputs=[source_image, 
-                    character, 
+            inputs=[source_image,
+                    source_characters,
                     reference_image,
                     sampling_step,
                     guidance_scale,
-                    batch_size,
                     device_mode],
-            outputs=[fontdiffuer_output_image, runtime_status],
+            outputs=[output_gallery, runtime_status, save_dir_text],
             api_name=False)
 
     try:
