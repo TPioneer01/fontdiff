@@ -7,3 +7,6 @@ pygame
 opencv-python
 info-nce-pytorch
 kornia
+scikit-image
+lpips
+pytorch-fid
