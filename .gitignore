@@ -12,3 +12,5 @@ temp.txt
 *.md
 
 outputs/
+
+temp/

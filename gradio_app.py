@@ -33,6 +33,11 @@ COMPARE_PIPE_CACHE = {
 }
 
 
+@lru_cache(maxsize=1)
+def _load_webui_css():
+    return Path(__file__).with_name("gradio_app.css").read_text(encoding="utf-8")
+
+
 def _parse_source_characters(source_characters):
     if source_characters is None:
         return []
@@ -746,134 +751,6 @@ def run_compare_fontdiffuer(source_image,
     return results_a, results_b, runtime_status, run_root, compare_root
 
 
-WEBUI_CSS = """
-.gradio-container {
-    background:
-        radial-gradient(circle at top left, rgba(59, 130, 246, 0.10), transparent 28%),
-        radial-gradient(circle at top right, rgba(16, 185, 129, 0.10), transparent 24%),
-        linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
-    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-}
-
-#webui-hero {
-    text-align: center;
-    margin-bottom: 0.75rem;
-}
-
-#webui-hero h1 {
-    font-size: 2.2rem;
-    font-weight: 800;
-    letter-spacing: 0.02em;
-    margin-bottom: 0.3rem;
-}
-
-#webui-hero p {
-    font-size: 1rem;
-    color: #4b5563;
-    margin: 0 auto;
-    max-width: 760px;
-}
-
-.section-card {
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    border-radius: 22px;
-    padding: 20px 20px 16px 20px;
-    background: rgba(255, 255, 255, 0.72);
-    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
-    backdrop-filter: blur(8px);
-}
-
-.section-card h3 {
-    margin-top: 0;
-}
-
-.hint-pill {
-    display: inline-block;
-    padding: 0.35rem 0.7rem;
-    margin: 0.15rem 0.3rem 0.15rem 0;
-    border-radius: 999px;
-    background: rgba(37, 99, 235, 0.08);
-    color: #1d4ed8;
-    font-size: 0.86rem;
-    font-weight: 600;
-}
-
-.workflow-step {
-    padding: 0.55rem 0.75rem;
-    border-left: 3px solid #3b82f6;
-    background: rgba(59, 130, 246, 0.06);
-    border-radius: 0 12px 12px 0;
-    margin-bottom: 0.5rem;
-}
-
-.gr-button {
-    border-radius: 999px !important;
-}
-
-.gradio-container .tab-nav button {
-    border-radius: 999px !important;
-}
-
-.compare-button,
-.batch-run-button,
-.single-run-button {
-    min-height: 56px;
-    font-size: 1.02rem;
-    font-weight: 800;
-    border-radius: 18px !important;
-    box-shadow: 0 14px 30px rgba(37, 99, 235, 0.22);
-}
-
-.compare-button {
-    background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 45%, #0f766e 100%) !important;
-}
-
-.compare-button:hover,
-.batch-run-button:hover,
-.single-run-button:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 16px 34px rgba(37, 99, 235, 0.28);
-}
-
-.upload-shell,
-.result-shell,
-.control-shell {
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    border-radius: 18px;
-    background: rgba(255, 255, 255, 0.72);
-    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
-    backdrop-filter: blur(8px);
-    padding: 12px;
-}
-
-.upload-box {
-    min-height: 280px;
-    max-height: 280px;
-    overflow-y: auto;
-    padding-right: 6px;
-}
-
-.upload-box > div {
-    height: 100%;
-}
-
-.result-box {
-    min-height: 260px;
-}
-
-.result-json textarea {
-    max-height: 240px;
-    overflow-y: auto;
-    background: rgba(255, 255, 255, 0.85) !important;
-}
-
-.result-json button {
-    border-radius: 999px !important;
-}
-
-"""
-
-
 def build_webui(ui_args):
     default_ckpt_dir_a = 'ckpt/origin'
     default_ckpt_dir_b = 'ckpt/canny-44W'
@@ -885,29 +762,15 @@ def build_webui(ui_args):
     )
     device_status_default = f"{loaded_message} Current runtime device: {loaded_device}."
 
-    with gr.Blocks(theme=gr.themes.Soft(), css=WEBUI_CSS) as demo:
+    with gr.Blocks(theme=gr.themes.Soft(), css=_load_webui_css()) as demo:
         gr.Markdown(
             "<div id='webui-hero'>"
-            "<h1>FontDiffuser Studio</h1>"
-            "<p>这里同时提供模型对比推理和图像评价中心。你可以上传单张图做 L1 / L2 / RMSE / PSNR / SSIM / LPIPS 评价，"
+            "<h1>fontdiff</h1>"
+            "<p>模型对比推理和图像评价中心。可上传单张图做 L1 / L2 / RMSE / PSNR / SSIM / LPIPS 评价，"
             "也可以上传一组图批量统计并计算 FID。</p>"
             "</div>"
         )
 
-        with gr.Group(elem_classes="section-card"):
-            gr.Markdown("### 快速引导")
-            gr.Markdown(
-                """
-                <div class='workflow-step'>1. 先选择上方标签页，决定是做模型对比还是进入评价中心。</div>
-                <div class='workflow-step'>2. 单样本模式上传一对图像，批量模式上传两组图像列表。</div>
-                <div class='workflow-step'>3. 勾选需要的指标，批量模式可以额外导出 CSV 并计算 FID。</div>
-                <div>
-                    <span class='hint-pill'>支持 GPU / CPU</span>
-                    <span class='hint-pill'>支持 PNG / JPG / WEBP</span>
-                    <span class='hint-pill'>FID 仅批量可用</span>
-                </div>
-                """
-            )
 
         with gr.Tabs():
             with gr.Tab("模型对比"):
