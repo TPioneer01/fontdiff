@@ -1,16 +1,13 @@
 __pycache__/
-*.pyc
-
-*.ckpt
-*.pth
-
+val/
+tools/
+outputs/
+temp/
 .vscode/
 
-
-temp.txt
-
+*.pyc
+*.ckpt
+*.pth
 *.md
 
-outputs/
-
-temp/
+temp.txt
