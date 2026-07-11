@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Union, Tuple
+import time
 import warnings
 
 try:
@@ -309,6 +310,7 @@ class BatchEvaluator:
         all_results = {metric: [] for metric in metrics}
         
         print(f"正在评价 {n_samples} 个样本...")
+        start_time = time.perf_counter()
         
         # 逐样本评价
         for idx, (img1, img2) in enumerate(zip(img_list1, img_list2)):
@@ -317,8 +319,14 @@ class BatchEvaluator:
             for metric, value in sample_results.items():
                 all_results[metric].append(value)
             
-            if (idx + 1) % max(1, n_samples // 10) == 0:
-                print(f"已完成 {idx + 1}/{n_samples} 样本")
+            processed = idx + 1
+            if processed % max(1, n_samples // 10) == 0 or processed == n_samples:
+                elapsed = time.perf_counter() - start_time
+                speed = processed / elapsed if elapsed > 0 else 0.0
+                remaining = max(0, n_samples - processed)
+                eta = (remaining / speed) if speed > 0 else None
+                eta_text = "unknown" if eta is None else f"{eta:.1f}s"
+                print(f"已完成 {processed}/{n_samples} 样本 | 速率 {speed:.2f} 样本/秒 | ETA {eta_text}")
         
         # 计算统计量
         final_results = {}
